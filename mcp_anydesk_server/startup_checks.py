@@ -39,7 +39,8 @@ class PreflightResult:
 
     @property
     def write_capable(self) -> bool:
-        return self.pywin32_available and self.pynput_available
+        # pynput no longer required — Ctrl+C now uses native SendInput
+        return self.pywin32_available
 
     @property
     def read_capable(self) -> bool:

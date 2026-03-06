@@ -43,13 +43,14 @@ MAX_SESSION_HISTORY_RESPONSE = 5    # Max steps returned in get_session_history
 # Session recording (N3)
 SESSION_RECORDING_DIR = "~/.mcp_anydesk/recordings"
 
-# Chunked injection
-CHUNK_SIZE = 30                     # Characters per chunk before re-focus
-CHUNK_REFOCUS_DELAY_MS = 200        # Delay between chunks for re-focus check
-CHUNK_MAX_RETRIES = 2               # Re-focus attempts per chunk before aborting
-
 # Keystroke cancel
 CANCEL_FOCUS_DELAY_MS = 300         # Focus delay before sending Ctrl+C
+
+
+# Auto-focus click: click window center after SetForegroundWindow so
+# AnyDesk receives input without requiring the user to place the cursor manually.
+FOCUS_CLICK_ENABLED = True
+FOCUS_CLICK_DELAY_MS = 50   # Extra delay after click before returning
 
 
 # --- v3 Phase 2 additions ---

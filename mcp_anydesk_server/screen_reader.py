@@ -39,7 +39,7 @@ from .config import (
 )
 from .sanitizer import sanitize
 from .startup_checks import TESSERACT_INSTALL_INSTRUCTIONS
-from .window_manager import get_pinned_hwnd
+from .window_manager import focus_and_verify, get_pinned_hwnd
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +68,13 @@ def _capture_region(
         raise RuntimeError(
             "No AnyDesk window pinned. Use select_anydesk_window first."
         )
+
+    # Bring AnyDesk to foreground before capture so mss grabs the
+    # correct window, not whatever happens to be on top.
+    try:
+        focus_and_verify(200)
+    except RuntimeError:
+        pass  # Best-effort: proceed with capture even if focus fails
 
     if region is None:
         x, y, w, h = _get_window_rect(hwnd)

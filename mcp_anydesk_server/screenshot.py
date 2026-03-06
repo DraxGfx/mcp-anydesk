@@ -31,7 +31,7 @@ from .config import (
     SCREENSHOT_MAX_WIDTH,
     SCREENSHOT_MAX_BASE64_KB,
 )
-from .window_manager import get_pinned_hwnd
+from .window_manager import focus_and_verify, get_pinned_hwnd
 
 
 def _get_window_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -103,6 +103,12 @@ def capture_screenshot(
             "saved_to": None,
             "note": "No AnyDesk window pinned. Use select_anydesk_window first.",
         }
+
+    # Bring AnyDesk to foreground before capture
+    try:
+        focus_and_verify(200)
+    except RuntimeError:
+        pass  # Best-effort: proceed with capture even if focus fails
 
     # Determine capture region
     if region_w > 0 and region_h > 0:

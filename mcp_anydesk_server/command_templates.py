@@ -3,11 +3,8 @@
 Generates bootstrap steps, command wrapper, and Base64 wrapper templates
 compatible with both PS 5.1 (powershell.exe) and PS 7+ (pwsh.exe).
 
-v3.1 changes:
-- bootstrap() removed. Replaced with bootstrap_steps() which returns a
-  list of 9 short commands (each < 120 chars, ~4 chunks at CHUNK_SIZE=30).
-  Eliminates the ~80s EncodedCommand injection timeout from v3.0.
-- wrap_command() and wrap_command_base64() unchanged.
+bootstrap_steps() returns a list of 9 short commands (each < 120 chars).
+wrap_command() and wrap_command_base64() wrap commands with sanitizer check.
 """
 
 from __future__ import annotations

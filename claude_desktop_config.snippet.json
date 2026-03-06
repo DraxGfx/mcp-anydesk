@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "anydesk": {
-      "command": "C:\\path\\to\\mcp_anydesk_server\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "mcp_anydesk_server"]
-    }
-  }
-}

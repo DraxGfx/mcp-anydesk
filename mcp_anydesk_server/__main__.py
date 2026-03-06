@@ -1,10 +1,11 @@
 """Entry point for `python -m mcp_anydesk_server` and `mcp-anydesk` CLI."""
 
-from .server import mcp
+from __future__ import annotations
 
 
 def main() -> None:
-    """Run the MCP AnyDesk Server over stdio transport."""
+    from .server import mcp
+
     mcp.run(transport="stdio")
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-anydesk-server"
-version = "3.3.0"
+version = "3.5.1"
 description = "MCP server for remote Windows administration via AnyDesk keystroke injection and OCR"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "mcp>=1.0",
     "pywin32>=306",
-    "pynput>=1.7",
     "mss>=9.0",
     "pytesseract>=0.3",
     "opencv-python>=4.8",
@@ -35,7 +34,7 @@ dependencies = [
 mcp-anydesk = "mcp_anydesk_server.__main__:main"
 
 [project.urls]
-Repository = "https://github.com/YOUR_USERNAME/mcp-anydesk-server"
+# Repository = "https://github.com/YOUR_USERNAME/mcp-anydesk-server"
 
 [tool.setuptools.packages.find]
 include = ["mcp_anydesk_server*"]

@@ -1,17 +1,7 @@
-"""MCP AnyDesk Server v3 — entry point.
+"""MCP AnyDesk Server — entry point.
 
-Initializes the MCP server via stdio transport, runs preflight checks,
-and conditionally registers tools based on available dependencies.
-
-v3 changes:
-- initialize_session: single-call setup wizard (M6)
-- send_cancel: Ctrl+C injection to abort hung commands (M5)
-- write_to_anydesk: force_dangerous parameter (M7)
-- capture_screenshot: JPEG default at 50% scale (M2)
-- check_health: window + sanitizer liveness check (N7)
-- export_session: markdown session report (N3)
-- list_recipes / get_recipe: pre-built command sequences (N8)
-- get_session_history: default truncated to 5 steps (M2)
+Registers MCP tools conditionally based on preflight dependency checks.
+Transport: stdio only (Claude Desktop subprocess).
 """
 
 from __future__ import annotations
@@ -25,7 +15,7 @@ import sys
 # stdio pipes. SelectorEventLoop handles pipes correctly.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    # Also set stdout/stdin to binary mode so MCP can write raw bytes
+    # Set stdout/stdin to binary mode so MCP stdio transport can write raw bytes
     import msvcrt
     msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
     msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
@@ -65,6 +55,16 @@ from .session_state import session, CommandRecord
 
 
 # ---------------------------------------------------------------------------
+# Tool: get_version  (ALWAYS)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def get_version() -> dict:
+    """Return the MCP server version. Use to verify the correct build is running."""
+    from . import __version__
+    return {"version": __version__}
+
+
+# ---------------------------------------------------------------------------
 # Tool: get_system_status  (ALWAYS)
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -74,7 +74,9 @@ def get_system_status() -> dict:
     Use this at the start of every session to understand which tools are
     available and whether Tesseract OCR is installed.
     """
+    from . import __version__
     data = asdict(preflight)
+    data["server_version"] = __version__
     data["write_capable"] = preflight.write_capable
     data["read_capable"] = preflight.read_capable
     data["ocr_capable"] = preflight.ocr_capable
@@ -137,8 +139,13 @@ def log_step_result(
             session._write_log_update(cmd)
 
             # Auto-activate sanitizer on bootstrap confirmation
-            bootstrap_confirmed = (
-                success and notes and "bootstrap" in notes.lower()
+            # Detects "BOOTSTRAP-OK" in command output or "bootstrap" in notes
+            _has_bootstrap_note = notes and "bootstrap" in notes.lower()
+            _has_bootstrap_output = (
+                cmd.output_text and "BOOTSTRAP-OK" in cmd.output_text
+            )
+            bootstrap_confirmed = success and (
+                _has_bootstrap_note or _has_bootstrap_output
             )
             if bootstrap_confirmed:
                 session.sanitizer_bootstrapped = True
@@ -326,7 +333,7 @@ if preflight.write_capable:
         send_cancel as _cancel_impl,
         write_to_anydesk as _write_impl,
     )
-    from .window_manager import enumerate_anydesk_windows, select_window
+    from .window_manager import enumerate_anydesk_windows, pin_session as _pin_session_impl
 
     @mcp.tool()
     def initialize_session(window_index: int = 0) -> dict:
@@ -363,17 +370,18 @@ if preflight.write_capable:
         idx = min(window_index, len(windows) - 1)
         hwnd, title, _ = windows[idx]
 
-        try:
-            select_window(hwnd)
-            session.pinned_hwnd = hwnd
-            session.pinned_title = title
-        except ValueError as exc:
+        # Use pin_session to register in both legacy _pinned_hwnd and
+        # named _sessions dict, so list_sessions() shows this session.
+        pin_result = _pin_session_impl(hwnd, "default")
+        if pin_result.get("status") == "error":
             return {
                 "status": "error",
                 "system_status": system_info,
                 "window": None,
-                "note": f"Failed to pin window {hwnd}: {exc}",
+                "note": f"Failed to pin window {hwnd}: {pin_result.get('note')}",
             }
+        session.pinned_hwnd = hwnd
+        session.pinned_title = title
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         return {
@@ -403,17 +411,13 @@ if preflight.write_capable:
     ) -> dict:
         """Inject keystrokes into the pinned AnyDesk window.
 
-        Text is typed character-by-character in chunks of 30 chars with
-        inter-chunk focus re-verification (prevents Windows foreground lock
-        loss on long commands). Enter is NEVER pressed — the operator must
-        press Enter manually after verifying the injected text.
+        Text is typed character-by-character via KEYEVENTF_UNICODE
+        (layout-independent — works with any local keyboard layout).
+        Enter is NEVER pressed — the operator must press Enter manually
+        after verifying the injected text.
 
         Commands are wrapped with the sanitizer check by default (wrap=True).
         Set wrap=False only for bootstrap, PS version detection, or non-PS contexts.
-
-        Uses VK_PACKET (KEYEVENTF_UNICODE) for injection — keyboard layout
-        agnostic. Characters like \\ | { } / = : are injected correctly
-        regardless of EN-US / ES-LA layout on either side.
 
         Args:
             command: Text to inject (single line, no newlines).
@@ -425,8 +429,8 @@ if preflight.write_capable:
             force_dangerous: Unused — kept for API compatibility.
 
         Returns:
-            Dict with status, char_count, chars_injected, chunks_used,
-            original_command, wrapped, elapsed_ms, and note.
+            Dict with status, char_count, original_command, wrapped,
+            elapsed_ms, and note.
         """
         _sanitizer_warning: str | None = None
         _sanitizer_active = session.sanitizer_bootstrapped
@@ -470,14 +474,19 @@ if preflight.write_capable:
 
     @mcp.tool()
     def send_cancel() -> dict:
-        """Send Ctrl+C to abort the currently running command.
+        """Focus AnyDesk and ask the operator to press Ctrl+C manually.
+
+        AnyDesk does NOT forward programmatic Ctrl+C as a real interrupt
+        signal. Only a physical Ctrl+C from the operator's keyboard works.
+
+        This tool focuses the AnyDesk window so the operator can press
+        Ctrl+C immediately without clicking first.
 
         Use when the operator says 'abort' or 'cancel', the terminal is
-        unresponsive, or a command appears hung (e.g., Test-Connection
-        to an unreachable host).
+        unresponsive, or a command appears hung.
 
         Returns:
-            Dict with status and note.
+            Dict with status and instructions.
         """
         return _cancel_impl()
 
@@ -599,11 +608,13 @@ if preflight.read_capable:
         region_w: int = 0,
         region_h: int = 0,
         scale_percent: int = SCREENSHOT_DEFAULT_SCALE,
+        return_base64: bool = False,
     ) -> dict:
         """Take a JPEG screenshot of the pinned AnyDesk window.
 
-        Returns a base64-encoded JPEG image (quality 60, 50% scale by default).
-        ~85-90% smaller than v2 PNG captures.
+        Saves to disk by default and returns metadata (path, dimensions, size).
+        Set return_base64=True to include the image in the response (WARNING:
+        this adds ~7KB of base64 text that takes 2-3 min to process in Claude Desktop).
 
         Use to understand GUI contexts (Hyper-V Manager, Server Manager,
         vSphere), verify visual state, or when OCR confidence is too low.
@@ -616,18 +627,24 @@ if preflight.read_capable:
             region_y: Y offset for sub-region.
             region_w: Width of sub-region (0 = full window).
             region_h: Height of sub-region.
-            scale_percent: Downscale factor (default 50). Lower = fewer tokens.
+            scale_percent: Downscale factor (default 25). Lower = fewer tokens.
+            return_base64: If True, include image_base64 in the response.
+                Default False — saves to disk only to avoid slow processing.
 
         Returns:
-            Dict with base64 JPEG image, dimensions, size_kb, and metadata.
+            Dict with dimensions, size_kb, saved_to path, and optionally image_base64.
         """
-        return _screenshot_impl(
+        result = _screenshot_impl(
             region_x=region_x,
             region_y=region_y,
             region_w=region_w,
             region_h=region_h,
             scale_percent=scale_percent,
+            save_to_disk=True,
         )
+        if not return_base64 and result.get("status") == "ok":
+            result.pop("image_base64", None)
+        return result
 
     @mcp.tool()
     def check_health() -> dict:
@@ -637,39 +654,60 @@ if preflight.read_capable:
         or window invalidation before attempting injection.
 
         Returns:
-            Dict with status and per-component check results.
+            Dict with status (ok/warning/degraded) and per-component check results.
+            - ok: all functional checks pass (injection will work)
+            - warning: functional checks pass but sanitizer is inactive (operator choice)
+            - degraded: one or more functional checks failed (injection may fail)
         """
         hwnd = session.pinned_hwnd
-        checks: dict[str, bool] = {
+
+        # Functional checks (affect whether injection works)
+        functional: dict[str, bool] = {
             "window_pinned": hwnd is not None,
-            "sanitizer_bootstrapped": session.sanitizer_bootstrapped,
         }
 
         try:
             import win32gui as _win32gui
-            checks["window_valid"] = hwnd is not None and bool(
+            functional["window_valid"] = hwnd is not None and bool(
                 _win32gui.IsWindow(hwnd)
             )
         except ImportError:
-            checks["window_valid"] = hwnd is not None
+            functional["window_valid"] = hwnd is not None
 
         # Dead session detection (N6): OCR title bar for disconnect keywords
-        if checks.get("window_valid"):
+        if functional.get("window_valid"):
             alive = _check_session_alive()
-            checks["session_connected"] = alive["status"] == "connected"
+            functional["session_connected"] = alive["status"] == "connected"
         else:
-            checks["session_connected"] = False
+            functional["session_connected"] = False
 
-        all_ok = all(checks.values())
+        # Optional checks (operator choice, not a functional problem)
+        optional: dict[str, bool] = {
+            "sanitizer_bootstrapped": session.sanitizer_bootstrapped,
+        }
+
+        functional_ok = all(functional.values())
+        sanitizer_active = optional["sanitizer_bootstrapped"]
+
+        if functional_ok and sanitizer_active:
+            status = "ok"
+            note = "All systems go."
+        elif functional_ok and not sanitizer_active:
+            status = "ok"
+            note = (
+                "Injection ready. Sanitizer inactive (optional). "
+                "Say 'bootstrap' to enable PII redaction."
+            )
+        else:
+            status = "degraded"
+            failed = [k for k, v in functional.items() if not v]
+            note = f"Functional checks failed: {', '.join(failed)}. Review before continuing."
+
         return {
-            "status": "ok" if all_ok else "degraded",
-            "checks": checks,
+            "status": status,
+            "checks": {**functional, **optional},
             "pinned_title": session.pinned_title,
-            "note": (
-                "All systems go."
-                if all_ok
-                else "One or more checks failed. Review before continuing."
-            ),
+            "note": note,
         }
 
 

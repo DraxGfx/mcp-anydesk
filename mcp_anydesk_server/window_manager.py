@@ -1,5 +1,10 @@
 """AnyDesk window enumeration, selection, and focus management.
 
+v3.4 changes:
+- _click_window_center(hwnd): click the center of the window after focus so
+  AnyDesk receives input without requiring the user to place the cursor.
+- focus_and_verify() calls _click_window_center() when FOCUS_CLICK_ENABLED.
+
 v3 changes (N4):
 - Named sessions dict: multiple windows can be pinned simultaneously.
 - pin_session(hwnd, name): pin with a human-readable label.
@@ -11,16 +16,28 @@ v3 changes (N4):
 
 from __future__ import annotations
 
+import ctypes
 import time
 
-import ctypes
-
 import win32api  # type: ignore[import-untyped]
-import win32gui  # type: ignore[import-untyped]
 import win32con  # type: ignore[import-untyped]
+import win32gui  # type: ignore[import-untyped]
 import win32process  # type: ignore[import-untyped]
 
-from .config import DEFAULT_FOCUS_DELAY_MS
+from .config import DEFAULT_FOCUS_DELAY_MS, FOCUS_CLICK_DELAY_MS, FOCUS_CLICK_ENABLED
+from .win32_input import (
+    INPUT,
+    INPUT_MOUSE,
+    MOUSEEVENTF_ABSOLUTE,
+    MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MOVE,
+    SIZEOF_INPUT,
+    SM_CXSCREEN,
+    SM_CYSCREEN,
+    GetSystemMetrics,
+    SendInput,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,10 +64,7 @@ def enumerate_anydesk_windows() -> list[tuple[int, str, str]]:
             return
         title = win32gui.GetWindowText(hwnd)
         class_name = win32gui.GetClassName(hwnd)
-        # Match by AnyDesk window class (most reliable)
         is_anydesk_class = "anydesk" in class_name.lower()
-        # Match by title only if "AnyDesk" appears as a standalone word
-        # (not as part of a path like "mcp_anydesk_server")
         import re
         is_anydesk_title = bool(re.search(r'(?<![_\w])AnyDesk(?![_\w])', title))
         if is_anydesk_class or is_anydesk_title:
@@ -175,11 +189,55 @@ def list_sessions() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Focus management
 # ---------------------------------------------------------------------------
+
+def _click_window_center(hwnd: int) -> None:
+    """Send a left-click to the center of the window via SendInput.
+
+    Normalizes window center coordinates to the 0–65535 range required by
+    MOUSEEVENTF_ABSOLUTE, then sends LEFTDOWN + LEFTUP atomically.
+
+    This ensures AnyDesk receives keyboard input after SetForegroundWindow
+    without requiring the user to manually place the cursor first.
+
+    Args:
+        hwnd: Window handle to click.
+    """
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        return  # Non-fatal — skip click if rect unavailable
+
+    cx = (left + right) // 2
+    cy = (top + bottom) // 2
+
+    screen_w = GetSystemMetrics(SM_CXSCREEN)
+    screen_h = GetSystemMetrics(SM_CYSCREEN)
+    if screen_w == 0 or screen_h == 0:
+        return
+
+    # Normalize to 0-65535 (MOUSEEVENTF_ABSOLUTE coordinate space)
+    nx = (cx * 65535) // screen_w
+    ny = (cy * 65535) // screen_h
+
+    inputs = (INPUT * 2)()
+    for i, btn_flag in enumerate([MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP]):
+        inputs[i].type = INPUT_MOUSE
+        inputs[i].ii.mi.dx = nx
+        inputs[i].ii.mi.dy = ny
+        inputs[i].ii.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | btn_flag
+
+    SendInput(2, inputs, SIZEOF_INPUT)  # Failure is non-fatal for the click
+
+
 def focus_and_verify(focus_delay_ms: int = DEFAULT_FOCUS_DELAY_MS) -> None:
     """Bring the pinned window to the foreground and verify focus.
 
     Uses AttachThreadInput to bypass Windows' foreground lock restriction,
     which prevents background processes from stealing focus.
+
+    If FOCUS_CLICK_ENABLED, also clicks the center of the window after the
+    focus delay so AnyDesk receives keyboard input without requiring the
+    user to place the cursor manually.
 
     Raises:
         RuntimeError: If no window is pinned or focus verification fails.
@@ -203,12 +261,10 @@ def focus_and_verify(focus_delay_ms: int = DEFAULT_FOCUS_DELAY_MS) -> None:
 
     attached = False
     try:
-        # Attach our thread to the foreground thread's input queue
         if fg_thread != our_thread:
             ctypes.windll.user32.AttachThreadInput(our_thread, fg_thread, True)
             attached = True
 
-        # Restore if minimized
         if win32gui.IsIconic(active_hwnd):
             win32gui.ShowWindow(active_hwnd, win32con.SW_RESTORE)
 
@@ -220,6 +276,12 @@ def focus_and_verify(focus_delay_ms: int = DEFAULT_FOCUS_DELAY_MS) -> None:
             ctypes.windll.user32.AttachThreadInput(our_thread, fg_thread, False)
 
     time.sleep(focus_delay_ms / 1000.0)
+
+    # Auto-click window center so AnyDesk accepts keyboard input
+    if FOCUS_CLICK_ENABLED:
+        _click_window_center(active_hwnd)
+        if FOCUS_CLICK_DELAY_MS > 0:
+            time.sleep(FOCUS_CLICK_DELAY_MS / 1000.0)
 
     foreground = win32gui.GetForegroundWindow()
     if foreground != active_hwnd:

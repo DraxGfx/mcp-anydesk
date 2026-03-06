@@ -1,238 +1,153 @@
 # MCP AnyDesk Server
 
-Servidor MCP para administración remota de servidores Windows a través de
-sesiones AnyDesk anidadas (Local → AnyDesk → AnyDesk → Servidor). Diseñado
-para entornos donde no se puede instalar agentes ni herramientas adicionales
-en el servidor remoto.
+Servidor MCP para administracion remota de servidores Windows a traves de
+sesiones AnyDesk anidadas (Local -> AnyDesk -> AnyDesk -> Servidor).
+
+Inyecta comandos PowerShell como keystrokes y lee la salida via OCR.
+Diseñado para entornos donde no se puede instalar agentes en el servidor remoto.
+
+**Claude nunca presiona Enter.** El operador siempre confirma manualmente.
 
 ---
 
-## Características
-
-- **Inyección de comandos PowerShell por keystroke** — chunked (30 chars/chunk)
-  con re-verificación de foco entre chunks. Usa VK_PACKET (KEYEVENTF_UNICODE)
-  para independencia total del layout de teclado
-- **Lectura de output por OCR** — Tesseract con preprocesado OpenCV, retry
-  adaptativo 4× con zoom cuando la confianza es baja, detección de output
-  truncado
-- **Modo Base64** — wrapper lite (sin bootstrap) y full (con PII sanitization).
-  Incluye validación CRC SHA256
-- **Screenshots comprimidos** — JPEG con cap garantizado de 15 KB (reducción
-  automática de calidad + resize de emergencia)
-- **Sanitización PII opcional** — dual-layer: PowerShell (s.ps1 en el remoto) +
-  Python post-OCR. Redacta IPs RFC1918, emails, cuentas DOMAIN\user, SIDs
-- **Validación de quotes** — detecta comillas desbalanceadas antes de inyectar
-  para prevenir el estado `>>` de continuación de PowerShell
-- **Sesiones nombradas** — múltiples ventanas AnyDesk pinneadas simultáneamente
-  (pin_session / switch_session / list_sessions)
-- **Recipes predefinidos** — secuencias de comandos para health check, inventario
-  de VMs, red, servicios, eventos de error, VMware
-- **Auditoría completa** — historial en memoria + log append-only en disco +
-  export a markdown
-- Compatible con **Hyper-V** y **VMware PowerCLI**
-
----
-
-## Requisitos
-
-- Windows 10/11 o Windows Server 2019+
-- Python 3.11+ (testeado en 3.13)
-- AnyDesk instalado y con al menos una sesión activa
-- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) instalado y
-  en PATH
-- Claude Desktop con soporte MCP
-
----
-
-## Instalación
-
-### Opción A — Setup automático (recomendado)
-
-#### 1. Clonar el repositorio
-
-```bash
-git clone <repo-url>
-cd mcp-anydesk-server
-```
-
-#### 2. Instalar Tesseract OCR
-
-Descargar e instalar desde:
-https://github.com/UB-Mannheim/tesseract/wiki
-
-Agregar la carpeta de instalación al PATH del sistema
-(típicamente `C:\Program Files\Tesseract-OCR`).
-
-#### 3. Ejecutar el instalador
-
-Doble clic en `install.bat` — o desde PowerShell:
+## Instalacion rapida
 
 ```powershell
-.\setup.ps1
+git clone https://github.com/DraxGfx/mcp-anydesk.git
+cd mcp-anydesk
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-El script verifica Python, crea el entorno virtual, instala el paquete con
-todas sus dependencias y parchea `claude_desktop_config.json` automáticamente.
+El instalador verifica Python, crea el entorno virtual, instala dependencias,
+corre preflight check y configura Claude Desktop automaticamente.
 
-Para omitir el parcheo automático de Claude Desktop:
-
-```powershell
-.\setup.ps1 -SkipClaudeConfig
-```
-
-#### 4. Reiniciar Claude Desktop
-
-Cerrar y reabrir Claude Desktop. El servidor aparecerá disponible
-en la interfaz de herramientas.
+Al finalizar, reinicia Claude Desktop.
 
 ---
 
-### Opción B — Instalación con pip
+## Instalacion manual
 
-```bash
-git clone <repo-url>
-cd mcp-anydesk-server
+```powershell
+git clone https://github.com/DraxGfx/mcp-anydesk.git
+cd mcp-anydesk
 python -m venv .venv
-.venv\Scripts\activate
-pip install .
+.venv\Scripts\pip.exe install -e .
 ```
 
-Verificar Tesseract en PATH:
+### Tesseract OCR (opcional, necesario para lectura de pantalla)
 
 ```powershell
-tesseract --version
+winget install UB-Mannheim.TesseractOCR
 ```
 
-Configurar Claude Desktop — editar `%APPDATA%\Claude\claude_desktop_config.json`:
+O descargar desde: https://github.com/UB-Mannheim/tesseract/wiki
+
+### Configurar Claude Desktop
+
+Editar `%APPDATA%\Claude\claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "anydesk": {
-      "command": "C:\\path\\to\\mcp-anydesk-server\\.venv\\Scripts\\python.exe",
+      "command": "C:\\dev\\mcp-anydesk\\.venv\\Scripts\\python.exe",
       "args": ["-m", "mcp_anydesk_server"]
     }
   }
 }
 ```
 
+> Reemplazar `C:\\dev\\mcp-anydesk` con la ruta real del proyecto.
+
 Reiniciar Claude Desktop.
 
 ---
 
-## Configuración
+## Caracteristicas
 
-Los defaults están en `mcp_anydesk_server/config.py`. Los más relevantes:
-
-| Constante | Default | Descripción |
-|-----------|---------|-------------|
-| `SCREENSHOT_JPEG_QUALITY` | 35 | Calidad JPEG inicial (1-100) |
-| `SCREENSHOT_DEFAULT_SCALE` | 25 | Escala de captura (%) |
-| `SCREENSHOT_MAX_WIDTH` | 640 | Ancho máximo en píxeles |
-| `SCREENSHOT_MAX_BASE64_KB` | 15 | Límite de tamaño de imagen |
-| `CHUNK_SIZE` | 30 | Caracteres por chunk de inyección |
-| `DEFAULT_KEYSTROKE_DELAY_MS` | 80 | Delay entre teclas (ms) |
-| `DEFAULT_FOCUS_DELAY_MS` | 500 | Delay tras enfocar ventana (ms) |
-| `OCR_DENOISE_H` | 13 | Fuerza de denoising OCR |
-| `AUDIT_LOG_DIR` | `~/.mcp_anydesk/logs` | Directorio de logs |
+- **Inyeccion via KEYEVENTF_UNICODE** — layout-independent, funciona con cualquier
+  teclado (EN-US, ES-PE, etc.). Caracter por caracter via SendInput
+- **Lectura OCR** — Tesseract + OpenCV con retry adaptativo y zoom 4x
+- **Modo Base64** — wrapper lite (sin bootstrap) y full (con PII sanitization)
+  con validacion CRC SHA256
+- **Screenshots JPEG** — cap de 15KB, guardados a disco (sin base64 en response
+  para evitar lag en Claude Desktop)
+- **Sanitizacion PII opcional** — dual-layer: PowerShell remoto + Python post-OCR.
+  Redacta IPs, emails, DOMAIN\user, SIDs
+- **Validacion de quotes** — detecta comillas desbalanceadas antes de inyectar
+- **Sesiones nombradas** — multiples ventanas AnyDesk pinneadas simultaneamente
+- **Recipes** — secuencias predefinidas para health check, VMs, red, servicios
+- **Auditoria** — historial en memoria + log en disco + export a markdown
+- Compatible con **Hyper-V** y **VMware PowerCLI**
 
 ---
 
 ## Uso
 
-### Flujo básico
-
-1. Abrir AnyDesk y conectar a la sesión remota
+1. Abrir AnyDesk y conectar a la sesion remota
 2. Abrir Claude Desktop
-3. Claude llama `initialize_session` → pinna la ventana AnyDesk activa
-4. (Opcional) Decir "bootstrap" → Claude activa sanitización PII en 9 pasos
+3. Claude llama `initialize_session` — pinnea la ventana AnyDesk
+4. (Opcional) Decir "bootstrap" — activa sanitizacion PII en 9 pasos
 5. Trabajar: Claude inyecta comandos, el operador presiona Enter, Claude lee el output
 
-### Regla fundamental
+### Tools disponibles (18)
 
-**Claude nunca presiona Enter.** El operador siempre confirma manualmente cada
-comando antes de ejecutarlo. Esto es intencional.
-
-### Sanitización PII
-
-Por defecto está desactivada. Para activarla decir "bootstrap" al inicio de la
-sesión. Claude inyectará 9 comandos que crean un script PowerShell en el remoto
-que redacta IPs, emails, cuentas y SIDs antes de devolver el output.
+| Tool | Descripcion |
+|------|-------------|
+| `get_version` | Version del MCP server |
+| `get_system_status` | Estado de dependencias y capacidades |
+| `initialize_session` | Pinnear ventana AnyDesk |
+| `write_to_anydesk` | Inyectar keystrokes (UNICODE) |
+| `read_from_anydesk` | Leer pantalla (OCR o Base64) |
+| `capture_screenshot` | Screenshot JPEG guardado a disco |
+| `send_cancel` | Enfocar AnyDesk para Ctrl+C manual |
+| `bootstrap_sanitizer` | Obtener los 9 pasos de bootstrap |
+| `log_step_result` | Registrar resultado de un paso |
+| `get_session_history` | Historial de comandos |
+| `export_session` | Exportar sesion a markdown |
+| `check_health` | Verificar estado de la sesion |
+| `list_recipes` | Listar recetas disponibles |
+| `get_recipe` | Obtener comandos de una receta |
+| `select_anydesk_window` | Listar/seleccionar ventanas |
+| `pin_session` | Pinnear ventana con nombre |
+| `switch_session` | Cambiar sesion activa |
+| `list_sessions` | Listar sesiones pinneadas |
 
 ---
 
-## Arquitectura
+## Limitaciones conocidas
 
-```
-Claude Desktop
-     │
-     │ MCP stdio
-     ▼
-┌─────────────────────────────────────────────────────┐
-│ mcp_anydesk_server/  (paquete Python, 17 tools)     │
-│  ├── server.py           entry point FastMCP        │
-│  ├── session_state.py    historial + audit log      │
-│  ├── keyboard_injector.py  chunked keystroke VK_PKT │
-│  ├── screen_reader.py    OCR + base64 decode        │
-│  ├── screenshot.py       JPEG capture               │
-│  ├── window_manager.py   named sessions             │
-│  ├── command_templates.py  wrap + bootstrap cmds     │
-│  ├── sanitizer.py        PII redaction (post-OCR)   │
-│  ├── recipes.py          secuencias predefinidas     │
-│  ├── config.py           constantes configurables   │
-│  └── startup_checks.py   preflight                  │
-└─────────────────────────────────────────────────────┘
-     │ pywin32 / pynput / mss / cv2 / pytesseract
-     ▼
-AnyDesk (local)  →  AnyDesk (remoto)  →  Servidor Windows
-```
+- **Ctrl+C programatico no funciona** — AnyDesk no reenvía Ctrl+C de SendInput
+  como señal de interrupcion. `send_cancel` enfoca la ventana para que el operador
+  presione Ctrl+C manualmente.
+- **OCR no es perfecto** — caracteres pueden leerse mal en resoluciones bajas.
+  Usar `capture_screenshot` o modo Base64 para output critico.
+- **Focus drift** — no mover el mouse ni cambiar de ventana durante la inyeccion.
 
 ---
 
 ## Seguridad
 
-- **No auto-Enter**: ninguna herramienta presiona Enter. El operador siempre
-  confirma antes de ejecutar.
-- **Validación de quotes**: las comillas desbalanceadas se detectan antes de
-  la inyección, previniendo el estado `>>` de PowerShell.
-- **Sanitización PII dual-layer**: el script PowerShell en el remoto redacta
-  datos sensibles antes de que lleguen al OCR; Python redacta lo que OCR pueda
-  haber captado de todas formas.
-- **Audit log append-only**: cada comando inyectado queda registrado en disco
-  con timestamp, resultado y notas del operador.
-- **Sin clipboard**: la inyección es siempre por keystrokes. El portapapeles
-  no funciona de forma fiable en sesiones AnyDesk anidadas.
+- **No auto-Enter**: ninguna herramienta presiona Enter
+- **Validacion de quotes**: comillas desbalanceadas se detectan antes de inyectar
+- **Sanitizacion PII dual-layer**: PowerShell remoto + Python post-OCR
+- **Audit log append-only**: cada comando queda registrado en disco
+- **Sin clipboard**: inyeccion siempre por keystrokes
 
 ---
 
-## Troubleshooting
+## Documentacion
 
-**`OSError: [Errno 22]` al iniciar en Python 3.13 + Windows**
-Resuelto internamente con `WindowsSelectorEventLoopPolicy`. Si aparece,
-verificar que `server.py` tiene el bloque de política al inicio.
+| Archivo | Contenido |
+|---------|-----------|
+| `docs/SETUP.md` | Guia de instalacion detallada |
+| `docs/SYSTEM_PROMPT.md` | System prompt para Claude Desktop |
+| `docs/TIPS.md` | Tips de uso (split mode, version check) |
+| `docs/testing/TEST_PROMPT.md` | Prompt de validacion (11 tests) |
+| `docs/changelog/` | Historial de cambios por sesion |
 
-**Tesseract no encontrado**
-Agregar `C:\Program Files\Tesseract-OCR` (o la ruta de instalación) a PATH
-y reiniciar la terminal.
+---
 
-**No se detecta ventana AnyDesk**
-Verificar que AnyDesk tiene al menos una sesión remota activa (no solo la
-aplicación abierta). Usar `select_anydesk_window()` sin argumentos para
-listar ventanas disponibles.
+## Licencia
 
-**Focus drift — caracteres van a la ventana equivocada**
-Aumentar `DEFAULT_FOCUS_DELAY_MS` y/o `CHUNK_REFOCUS_DELAY_MS` en `config.py`.
-Asegurarse de no mover el mouse ni cambiar de ventana durante la inyección.
-
-**OCR con confianza baja (< 0.4)**
-`read_from_anydesk` reintenta automáticamente con zoom 4×. Si persiste, usar
-`capture_screenshot` para ver el estado visual y diagnosticar manualmente.
-Considerar aumentar el tamaño del terminal remoto o usar Consolas 14pt+.
-
-**Screenshots grandes (> 15 KB)**
-El loop de reducción de calidad debería garantizar el límite. Si persiste,
-reducir `SCREENSHOT_DEFAULT_SCALE` o `SCREENSHOT_MAX_WIDTH` en `config.py`.
-
-**`[SANITIZER-MISSING]` en el output**
-El script `s.ps1` no existe en el remoto o fue eliminado. Decir "bootstrap"
-para re-ejecutar la secuencia de 9 pasos.
+MIT

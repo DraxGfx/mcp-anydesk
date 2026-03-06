@@ -34,7 +34,7 @@ dependencies = [
 mcp-anydesk = "mcp_anydesk_server.__main__:main"
 
 [project.urls]
-# Repository = "https://github.com/YOUR_USERNAME/mcp-anydesk-server"
+Repository = "https://github.com/DraxGfx/mcp-anydesk"
 
 [tool.setuptools.packages.find]
 include = ["mcp_anydesk_server*"]
